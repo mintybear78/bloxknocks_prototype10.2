@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>bloxknocks_beta</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #87CEEB;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+        /* Crosshair */
+        #crosshair {
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 8px; height: 8px;
+            background-color: white;
+            border: 2px solid rgba(0,0,0,0.5);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 10;
+            transition: transform 0.2s;
+        }
+        /* UI Elements */
+        #ui {
+            position: absolute; top: 20px; left: 20px;
+            color: white; font-size: 24px; font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            z-index: 10;
+        }
+        /* FPS Counter */
+        #fps-counter {
+            position: absolute; top: 20px; right: 20px;
+            color: #00ff00; font-family: monospace; font-size: 18px;
+            background: rgba(0,0,0,0.5); padding: 5px 10px;
+            border-radius: 5px; z-index: 15;
+        }
+        /* Player Health Bar */
+        #player-health-bg {
+            position: absolute; bottom: 30px; left: 50%;
+            transform: translateX(-50%);
+            width: 400px; height: 25px;
+            background-color: rgba(0, 0, 0, 0.7);
+            border: 2px solid white; border-radius: 10px;
+            z-index: 10; overflow: hidden;
+        }
+        #player-health-fill {
+            width: 100%; height: 100%;
+            background-color: #00ff00;
+            transition: width 0.1s, background-color 0.3s;
+        }
+        /* Overlays */
+        #instructions, #game-over {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0,0,0,0.8); color: white;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 20; cursor: pointer;
+            text-align: center;
+        }
+        #game-over { display: none; background: rgba(100,0,0,0.9); }
+        h1 { margin: 0 0 10px 0; font-size: 48px; letter-spacing: 2px; }
+        .btn { padding: 10px 20px; font-size: 20px; margin-top: 20px; cursor: pointer; background: white; color: black; border: none; font-weight: bold; border-radius: 5px; }
+        .btn:hover { background: #ddd; }
+    </style>
+</head>
+<body>
+
+    <div id="fps-counter">FPS: 0</div>
+    <div id="crosshair"></div>
+    <div id="ui">Score: <span id="score">0</span></div>
+    
+    <div id="player-health-bg">
+        <div id="player-health-fill"></div>
+    </div>
+
+    <div id="instructions">
+        <h1>BLOXKNOCKS_BETA</h1>
+        <p>Click anywhere to start the session</p>
+        <p><b>WASD</b>: Move | <b>Space</b>: Jump | <b>Left Click</b>: Shoot | <b>Right Click</b>: Aim</p>
+    </div>
+
+    <div id="game-over">
+        <h1>GAME OVER</h1>
+        <p>YOU DIED</p>
+        <button class="btn" onclick="location.reload()">Restart Session</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        // --- GAME LOGIC ---
+        let score = 0, isGameOver = false, playerHP = 100, maxPlayerHP = 100;
+        
+        // FPS Variables
+        let lastTime = performance.now();
+        let frameCount = 0;
+        const fpsDisplay = document.getElementById('fps-counter');
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 10, 60);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        dirLight.position.set(10, 20, 10);
+        scene.add(dirLight);
+
+        const gridHelper = new THREE.GridHelper(200, 100, 0x000000, 0x555555);
+        scene.add(gridHelper);
+
+        // --- PLAYER ---
+        const playerGroup = new THREE.Group();
+        scene.add(playerGroup);
+
+        const playerMesh = new THREE.Mesh(
+            new THREE.BoxGeometry(1, 2, 1),
+            new THREE.MeshLambertMaterial({ color: 0x2266cc })
+        );
+        playerMesh.position.y = 1;
+        playerGroup.add(playerMesh);
+
+        const gunGroup = new THREE.Group();
+        const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 1.2), new THREE.MeshLambertMaterial({ color: 0x333333 }));
+        barrel.position.set(0, 0, -0.4);
+        const grip = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.4, 0.2), new THREE.MeshLambertMaterial({ color: 0x333333 }));
+        grip.position.set(0, -0.2, 0); grip.rotation.x = 0.2;
+        gunGroup.add(barrel); gunGroup.add(grip);
+        gunGroup.position.set(0.7, 1.2, -0.5);
+        playerGroup.add(gunGroup);
+
+        const cameraPivot = new THREE.Group();
+        cameraPivot.position.set(0, 1.5, 0);
+        playerGroup.add(cameraPivot);
+        camera.position.set(1.5, 0.5, 4);
+        cameraPivot.add(camera);
+
+        const bullets = [], enemies = [];
+        let yaw = 0, pitch = 0, walkTime = 0, recoilTimer = 0, velocityY = 0;
+        const keys = {};
+        const gravity = -0.012, jumpForce = 0.25;
+        let isGrounded = true, isAiming = false;
+
+        // --- INPUTS ---
+        document.addEventListener('contextmenu', e => e.preventDefault());
+        document.getElementById('instructions').addEventListener('click', () => {
+            if (!isGameOver) document.body.requestPointerLock();
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            if (isGameOver) return;
+            document.getElementById('instructions').style.display = (document.pointerLockElement === document.body) ? 'none' : 'flex';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement === document.body && !isGameOver) {
+                const sens = isAiming ? 0.001 : 0.0022;
+                yaw -= e.movementX * sens;
+                pitch -= e.movementY * sens;
+                pitch = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, pitch));
+            }
+        });
+
+        document.addEventListener('keydown', (e) => { keys[e.code] = true; });
+        document.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+        document.addEventListener('mousedown', (e) => {
+            if (document.pointerLockElement !== document.body || isGameOver) return;
+            if (e.button === 2) {
+                isAiming = true;
+                document.getElementById('crosshair').style.transform = 'translate(-50%, -50%) scale(0.5)';
+            }
+            if (e.button === 0) {
+                recoilTimer = 0.15;
+                const bullet = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.5), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
+                const gunTip = new THREE.Vector3(0, 0, -1).applyMatrix4(gunGroup.matrixWorld);
+                bullet.position.copy(gunTip);
+                const raycaster = new THREE.Raycaster();
+                raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+                const targetPoint = raycaster.ray.origin.clone().add(raycaster.ray.direction.multiplyScalar(100));
+                bullet.velocity = targetPoint.sub(gunTip).normalize().multiplyScalar(isAiming ? 2.8 : 1.8);
+                bullet.lookAt(bullet.position.clone().add(bullet.velocity));
+                bullet.life = 80;
+                bullets.push(bullet);
+                scene.add(bullet);
+            }
+        });
+
+        document.addEventListener('mouseup', (e) => {
+            if (e.button === 2) {
+                isAiming = false;
+                document.getElementById('crosshair').style.transform = 'translate(-50%, -50%) scale(1)';
+            }
+        });
+
+        function spawnEnemy() {
+            const eGroup = new THREE.Group();
+            const eMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.4, 1.2), new THREE.MeshLambertMaterial({ color: 0xff4444 }));
+            eMesh.position.y = 1.2;
+            eGroup.add(eMesh);
+            const hpPlane = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.15), new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide }));
+            hpPlane.position.y = 2.8;
+            eGroup.hpBar = hpPlane;
+            eGroup.add(hpPlane);
+            eGroup.hp = 100;
+            const ang = Math.random() * Math.PI * 2;
+            const dist = 30 + Math.random() * 10;
+            eGroup.position.set(playerGroup.position.x + Math.cos(ang) * dist, 0, playerGroup.position.z + Math.sin(ang) * dist);
+            enemies.push(eGroup);
+            scene.add(eGroup);
+        }
+
+        function takeDamage(val) {
+            playerHP -= val;
+            document.getElementById('player-health-fill').style.width = Math.max(0, (playerHP/maxPlayerHP)*100) + '%';
+            if (playerHP <= 0 && !isGameOver) {
+                isGameOver = true;
+                document.exitPointerLock();
+                document.getElementById('game-over').style.display = 'flex';
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // FPS Counter Logic
+            frameCount++;
+            const time = performance.now();
+            if (time >= lastTime + 1000) {
+                fpsDisplay.innerText = `FPS: ${frameCount}`;
+                frameCount = 0;
+                lastTime = time;
+            }
+
+            if (isGameOver) { renderer.render(scene, camera); return; }
+
+            if (document.pointerLockElement === document.body) {
+                const tX = isAiming ? 0.7 : 1.5;
+                const tZ = isAiming ? 1.8 : 4;
+                camera.position.lerp(new THREE.Vector3(tX, 0.5, tZ), 0.2);
+                camera.fov += ((isAiming ? 40 : 75) - camera.fov) * 0.2;
+                camera.updateProjectionMatrix();
+
+                playerGroup.rotation.y = yaw;
+                cameraPivot.rotation.x = pitch;
+
+                let mov = false;
+                const s = isAiming ? 0.07 : 0.16;
+                const fwd = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                const rgt = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+
+                if (keys['KeyW']) { playerGroup.position.add(fwd.clone().multiplyScalar(s)); mov = true; }
+                if (keys['KeyS']) { playerGroup.position.add(fwd.clone().multiplyScalar(-s)); mov = true; }
+                if (keys['KeyA']) { playerGroup.position.add(rgt.clone().multiplyScalar(-s)); mov = true; }
+                if (keys['KeyD']) { playerGroup.position.add(rgt.clone().multiplyScalar(s)); mov = true; }
+
+                if (keys['Space'] && isGrounded) { velocityY = jumpForce; isGrounded = false; }
+                velocityY += gravity;
+                playerGroup.position.y += velocityY;
+                if (playerGroup.position.y <= 0) { playerGroup.position.y = 0; velocityY = 0; isGrounded = true; }
+
+                if (mov && isGrounded) {
+                    walkTime += 0.25;
+                    playerMesh.position.y = 1 + Math.abs(Math.sin(walkTime)) * 0.15;
+                } else { playerMesh.position.y = 1; }
+
+                recoilTimer = Math.max(0, recoilTimer - 0.02);
+                gunGroup.rotation.x = pitch + recoilTimer;
+                gunGroup.position.z = -0.5 + recoilTimer * 0.4;
+
+                bullets.forEach((b, i) => {
+                    b.position.add(b.velocity);
+                    if (--b.life <= 0) { scene.remove(b); bullets.splice(i, 1); }
+                    enemies.forEach((e, j) => {
+                        if (b.position.distanceTo(e.position.clone().add(new THREE.Vector3(0,1.2,0))) < 1.2) {
+                            e.hp -= 35;
+                            e.hpBar.scale.x = Math.max(0, e.hp / 100);
+                            scene.remove(b); bullets.splice(i, 1);
+                            if (e.hp <= 0) { scene.remove(e); enemies.splice(j, 1); score += 10; document.getElementById('score').innerText = score; }
+                        }
+                    });
+                });
+
+                enemies.forEach(e => {
+                    e.lookAt(playerGroup.position);
+                    e.hpBar.lookAt(camera.getWorldPosition(new THREE.Vector3()));
+                    const d = playerGroup.position.clone().sub(e.position).normalize();
+                    e.position.add(d.multiplyScalar(0.07));
+                    if (e.position.distanceTo(playerGroup.position) < 1.4) takeDamage(0.5);
+                });
+
+                if (Math.random() < 0.015 && enemies.length < 12) spawnEnemy();
+            }
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
