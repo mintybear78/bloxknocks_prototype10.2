@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>bloxknocks_beta</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #87CEEB; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none; }
+        
+        /* HUD */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        .hud { pointer-events: auto; color: white; text-shadow: 2px 2px 4px #000; position: absolute; font-weight: bold; }
+        #crosshair { top: 50%; left: 50%; width: 8px; height: 8px; background: white; border: 2px solid rgba(0,0,0,0.5); border-radius: 50%; transform: translate(-50%, -50%); position: absolute; transition: transform 0.2s; }
+        #fps-counter { top: 15px; right: 20px; font-family: monospace; color: #0f0; font-size: 18px; background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 5px; }
+        #score-display { top: 15px; left: 20px; font-size: 24px; }
+        
+        #health-bar-container { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); width: 400px; height: 25px; background: rgba(0,0,0,0.7); border: 2px solid white; border-radius: 10px; overflow: hidden; }
+        #health-fill { width: 100%; height: 100%; background: #00ff00; transition: width 0.1s, background-color 0.3s; }
+
+        /* Menus */
+        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; color: white; text-align: center; }
+        .menu-box { background: #222; padding: 40px; border-radius: 10px; border: 2px solid #555; max-width: 500px; }
+        h1 { margin: 0 0 10px 0; font-size: 42px; letter-spacing: 2px; color: #fff; }
+        h2 { margin: 0 0 20px 0; color: #ff4444; }
+        p { font-size: 18px; line-height: 1.5; margin-bottom: 20px; }
+        .tutorial-box { background: #111; padding: 15px; border-radius: 8px; border: 1px solid #444; margin-bottom: 20px; text-align: left; }
+        
+        select { padding: 10px; width: 100%; margin: 10px 0 20px 0; border-radius: 5px; cursor: pointer; font-size: 16px; background: #333; color: white; border: 1px solid #666; }
+        .btn { background: #ffffff; color: #000000; border: none; padding: 15px 30px; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 18px; width: 100%; transition: 0.2s; }
+        .btn:hover { background: #cccccc; transform: scale(1.05); }
+
+        #pause-menu { display: none; }
+        #game-over { display: none; background: rgba(100,0,0,0.9); }
+    </style>
+</head>
+<body>
+
+    <div id="start-screen" class="overlay">
+        <div class="menu-box">
+            <h1>BLOXKNOCKS</h1>
+            <div class="tutorial-box">
+                <b>🎮 HOW TO PLAY:</b><br><br>
+                • <b>W, A, S, D</b> - Move around<br>
+                • <b>Spacebar</b> - Jump<br>
+                • <b>Left Click</b> - Shoot<br>
+                • <b>Right Click (Hold)</b> - Aim Down Sights<br>
+                • <b>ESC</b> - Pause Game / Settings<br><br>
+                <i>Survive as long as you can. Enemies drain HP if they touch you!</i>
+            </div>
+            <button class="btn" id="start-btn">PLAY NOW</button>
+        </div>
+    </div>
+
+    <div id="pause-menu" class="overlay">
+        <div class="menu-box">
+            <h1>PAUSED</h1>
+            <p>Press Resume or hit ESC to return to the game.</p>
+            <label style="font-weight: bold; font-size: 14px; letter-spacing: 1px;">GRAPHICS QUALITY</label>
+            <select id="graphics-select">
+                <option value="low">Low (Classic Blocks, Better FPS)</option>
+                <option value="high">High (Roblox Characters, Detailed Weapons)</option>
+            </select>
+            <button class="btn" id="resume-btn">RESUME GAME</button>
+        </div>
+    </div>
+
+    <div id="game-over" class="overlay">
+        <div class="menu-box" style="background: transparent; border: none;">
+            <h1 style="font-size: 60px; color: #ff0000; text-shadow: 2px 2px 10px black;">GAME OVER</h1>
+            <h2>YOU DIED</h2>
+            <button class="btn" onclick="location.reload()">RESTART SESSION</button>
+        </div>
+    </div>
+
+    <div id="ui-layer">
+        <div id="fps-counter" class="hud">FPS: 0</div>
+        <div id="score-display" class="hud">Score: <span id="score">0</span></div>
+        <div id="crosshair"></div>
+        <div id="health-bar-container"><div id="health-fill"></div></div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        // --- GAME STATE ---
+        let gameStarted = false, isPaused = false, isGameOver = false;
+        let score = 0, playerHP = 100, maxPlayerHP = 100;
+        let currentQuality = 'low';
+        
+        let yaw = 0, pitch = 0, walkTime = 0, recoilTimer = 0;
+        let velocityY = 0, isGrounded = true, isAiming = false;
+        const gravity = -0.012, jumpForce = 0.25;
+        const keys = {}, bullets = [], enemies = [];
+
+        // FPS
+        let lastTime = performance.now(), frameCount = 0;
+
+        // --- AUDIO ENGINE ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playShootSound() {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sawtooth'; // Harsher, louder sound
+            osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + 0.1);
+            
+            gain.gain.setValueAtTime(0.5, audioCtx.currentTime); // 5x Louder than before
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        }
+
+        // --- THREE.JS SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 10, 60);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        dirLight.position.set(10, 20, 10);
+        scene.add(dirLight);
+
+        const gridHelper = new THREE.GridHelper(200, 100, 0x000000, 0x444444);
+        scene.add(gridHelper);
+
+        // --- MESH BUILDERS (Roblox vs Block) ---
+        function createRobloxCharacter(color) {
+            const group = new THREE.Group();
+            const mat = new THREE.MeshLambertMaterial({ color: color });
+            
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.8), mat); head.position.y = 1.4;
+            const torso = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 0.6), mat); torso.position.y = 0.4;
+            const armL = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.2, 0.4), mat); armL.position.set(-0.8, 0.4, 0);
+            const armR = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.2, 0.4), mat); armR.position.set(0.8, 0.4, 0);
+            const legL = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1.2, 0.45), mat); legL.position.set(-0.35, -0.8, 0);
+            const legR = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1.2, 0.45), mat); legR.position.set(0.35, -0.8, 0);
+            
+            group.add(head, torso, armL, armR, legL, legR);
+            group.position.y = 1.4; // Lift off ground
+            return group;
+        }
+
+        function createBlockCharacter(color) {
+            const mesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.4, 1.2), new THREE.MeshLambertMaterial({ color: color }));
+            mesh.position.y = 1.2;
+            return mesh;
+        }
+
+        function buildGun() {
+            const gunGroup = new THREE.Group();
+            const mat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+            
+            // Low Quality Parts
+            const lBarrel = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 1.2), mat); lBarrel.position.z = -0.4;
+            const lGrip = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.4, 0.2), mat); lGrip.position.set(0, -0.2, 0); lGrip.rotation.x = 0.2;
+            const lowGun = new THREE.Group(); lowGun.add(lBarrel, lGrip);
+            
+            // High Quality Parts (Adds scope and mag)
+            const hBarrel = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, 1.4), mat); hBarrel.position.z = -0.5;
+            const hGrip = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.4, 0.2), mat); hGrip.position.set(0, -0.2, 0); hGrip.rotation.x = 0.2;
+            const mag = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.4, 0.3), mat); mag.position.set(0, -0.3, -0.4); mag.rotation.x = -0.1;
+            const scope = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.15, 0.4), mat); scope.position.set(0, 0.2, -0.2);
+            const highGun = new THREE.Group(); highGun.add(hBarrel, hGrip, mag, scope);
+            highGun.visible = false;
+
+            gunGroup.add(lowGun);
+            gunGroup.add(highGun);
+            gunGroup.low = lowGun; gunGroup.high = highGun;
+            return gunGroup;
+        }
+
+        // --- PLAYER SETUP ---
+        const playerGroup = new THREE.Group();
+        scene.add(playerGroup);
+
+        const playerLow = createBlockCharacter(0x2266cc);
+        const playerHigh = createRobloxCharacter(0x2266cc); playerHigh.visible = false;
+        const playerVisuals = new THREE.Group();
+        playerVisuals.add(playerLow, playerHigh);
+        playerGroup.add(playerVisuals);
+
+        const gun = buildGun();
+        gun.position.set(0.7, 1.2, -0.5);
+        playerGroup.add(gun);
+
+        const cameraPivot = new THREE.Group();
+        cameraPivot.position.set(0, 1.5, 0);
+        playerGroup.add(cameraPivot);
+        camera.position.set(1.5, 0.5, 4);
+        cameraPivot.add(camera);
+
+        // --- GRAPHICS TOGGLE LOGIC ---
+        function updateGraphicsQuality(q) {
+            currentQuality = q;
+            const isHigh = (q === 'high');
+            
+            renderer.antialias = isHigh;
+            
+            playerLow.visible = !isHigh; playerHigh.visible = isHigh;
+            gun.low.visible = !isHigh; gun.high.visible = isHigh;
+
+            enemies.forEach(e => {
+                e.lowMesh.visible = !isHigh;
+                e.highMesh.visible = isHigh;
+            });
+        }
+
+        document.getElementById('graphics-select').addEventListener('change', (e) => {
+            updateGraphicsQuality(e.target.value);
+        });
+
+        // --- UI & MENUS (PAUSE/ESC LOGIC) ---
+        const startScreen = document.getElementById('start-screen');
+        const pauseMenu = document.getElementById('pause-menu');
+
+        document.getElementById('start-btn').addEventListener('click', () => {
+            gameStarted = true;
+            document.body.requestPointerLock();
+        });
+
+        document.getElementById('resume-btn').addEventListener('click', () => {
+            document.body.requestPointerLock();
+        });
+
+        // Magic happens here: The browser automatically drops pointer lock on ESC.
+        document.addEventListener('pointerlockchange', () => {
+            if (isGameOver) return;
+            
+            if (document.pointerLockElement === document.body) {
+                // Game Active
+                startScreen.style.display = 'none';
+                pauseMenu.style.display = 'none';
+                isPaused = false;
+            } else {
+                // Game Paused (ESC was pressed)
+                if (gameStarted) {
+                    pauseMenu.style.display = 'flex';
+                    isPaused = true;
+                }
+            }
+        });
+
+        // --- INPUTS ---
+        document.addEventListener('contextmenu', e => e.preventDefault());
+        document.addEventListener('keydown', (e) => keys[e.code] = true);
+        document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement && !isPaused && !isGameOver) {
+                const sens = isAiming ? 0.001 : 0.002;
+                yaw -= e.movementX * sens;
+                pitch -= e.movementY * sens;
+                pitch = Math.max(-1.2, Math.min(1.2, pitch));
+            }
+        });
+
+        document.addEventListener('mousedown', (e) => {
+            if (!document.pointerLockElement || isPaused || isGameOver) return;
+            
+            if (e.button === 2) {
+                isAiming = true;
+                document.getElementById('crosshair').style.transform = 'translate(-50%, -50%) scale(0.5)';
+            }
+            if (e.button === 0) { 
+                playShootSound();
+                recoilTimer = 0.2;
+                
+                const b = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.5), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
+                const gunTip = new THREE.Vector3(0, 0, -1).applyMatrix4(gun.matrixWorld);
+                b.position.copy(gunTip);
+                
+                const raycaster = new THREE.Raycaster();
+                raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+                const targetPoint = raycaster.ray.origin.clone().add(raycaster.ray.direction.multiplyScalar(100));
+                
+                b.velocity = targetPoint.sub(gunTip).normalize().multiplyScalar(isAiming ? 3 : 2);
+                b.lookAt(b.position.clone().add(b.velocity));
+                b.life = 60;
+                bullets.push(b);
+                scene.add(b);
+            }
+        });
+        document.addEventListener('mouseup', (e) => {
+            if (e.button === 2) {
+                isAiming = false;
+                document.getElementById('crosshair').style.transform = 'translate(-50%, -50%) scale(1)';
+            }
+        });
+
+        // --- ENEMIES ---
+        function spawnEnemy() {
+            const eGroup = new THREE.Group();
+            
+            const lowM = createBlockCharacter(0xff4444);
+            const highM = createRobloxCharacter(0xff4444);
+            
+            lowM.visible = (currentQuality === 'low');
+            highM.visible = (currentQuality === 'high');
+            
+            eGroup.lowMesh = lowM; eGroup.highMesh = highM;
+            eGroup.add(lowM, highM);
+
+            // Health Bar
+            const hpPlane = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.15), new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide }));
+            hpPlane.position.y = 2.8;
+            eGroup.hpBar = hpPlane;
+            eGroup.add(hpPlane);
+
+            eGroup.hp = 100;
+            const ang = Math.random() * Math.PI * 2;
+            const dist = 30 + Math.random() * 10;
+            eGroup.position.set(playerGroup.position.x + Math.cos(ang)*dist, 0, playerGroup.position.z + Math.sin(ang)*dist);
+            
+            enemies.push(eGroup);
+            scene.add(eGroup);
+        }
+
+        // --- DAMAGE & GAME OVER ---
+        function takeDamage(amt) {
+            if (isGameOver) return;
+            playerHP -= amt;
+            const fill = document.getElementById('health-fill');
+            fill.style.width = Math.max(0, (playerHP/maxPlayerHP)*100) + '%';
+            
+            if (playerHP < 30) fill.style.backgroundColor = '#ff0000';
+            else if (playerHP < 60) fill.style.backgroundColor = '#ffff00';
+
+            if (playerHP <= 0) {
+                isGameOver = true;
+                document.exitPointerLock();
+                scene.remove(playerGroup); // Player disappears!
+                document.getElementById('game-over').style.display = 'flex';
+                document.getElementById('ui-layer').style.display = 'none'; // Hide HUD
+            }
+        }
+
+        // --- GAME LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // FPS Counter
+            frameCount++;
+            const now = performance.now();
+            if (now >= lastTime + 1000) {
+                document.getElementById('fps-counter').innerText = `FPS: ${frameCount}`;
+                frameCount = 0; lastTime = now;
+            }
+
+            if (isGameOver || isPaused || !gameStarted) {
+                renderer.render(scene, camera);
+                return;
+            }
+
+            if (document.pointerLockElement) {
+                // Camera Lerp (ADS)
+                camera.position.lerp(new THREE.Vector3(isAiming ? 0.7 : 1.5, 0.5, isAiming ? 1.8 : 4), 0.2);
+                camera.fov += ((isAiming ? 45 : 75) - camera.fov) * 0.2;
+                camera.updateProjectionMatrix();
+
+                playerGroup.rotation.y = yaw;
+                cameraPivot.rotation.x = pitch;
+
+                // Movement
+                let moved = false;
+                const speed = isAiming ? 0.08 : 0.15;
+                const fwd = new THREE.Vector3(0,0,-1).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+                const rgt = new THREE.Vector3(1,0,0).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+
+                if(keys['KeyW']) { playerGroup.position.add(fwd.clone().multiplyScalar(speed)); moved = true; }
+                if(keys['KeyS']) { playerGroup.position.add(fwd.clone().multiplyScalar(-speed)); moved = true; }
+                if(keys['KeyA']) { playerGroup.position.add(rgt.clone().multiplyScalar(-speed)); moved = true; }
+                if(keys['KeyD']) { playerGroup.position.add(rgt.clone().multiplyScalar(speed)); moved = true; }
+
+                // Physics / Jump
+                if(keys['Space'] && isGrounded) { velocityY = jumpForce; isGrounded = false; }
+                velocityY += gravity;
+                playerGroup.position.y += velocityY;
+                if(playerGroup.position.y <= 0) { playerGroup.position.y = 0; velocityY = 0; isGrounded = true; }
+
+                // ANIMATIONS: Walk Bobbing
+                if (moved && isGrounded) {
+                    walkTime += 0.25;
+                    playerVisuals.position.y = Math.abs(Math.sin(walkTime)) * 0.15;
+                } else {
+                    playerVisuals.position.y = 0;
+                }
+
+                // ANIMATIONS: Gun Recoil
+                recoilTimer = Math.max(0, recoilTimer - 0.02);
+                gun.rotation.x = pitch + recoilTimer;
+                gun.position.z = -0.5 + recoilTimer * 0.4;
+
+                // Bullet Logic
+                bullets.forEach((b, i) => {
+                    b.position.add(b.velocity);
+                    if (--b.life <= 0) { scene.remove(b); bullets.splice(i, 1); return; }
+                    
+                    enemies.forEach((e, j) => {
+                        if (b.position.distanceTo(e.position.clone().add(new THREE.Vector3(0,1.2,0))) < 1.4) {
+                            e.hp -= 35;
+                            e.hpBar.scale.x = Math.max(0, e.hp / 100);
+                            scene.remove(b); bullets.splice(i, 1);
+                            if (e.hp <= 0) {
+                                scene.remove(e); enemies.splice(j, 1);
+                                score += 10; document.getElementById('score').innerText = score;
+                            }
+                        }
+                    });
+                });
+
+                // Enemy Logic
+                enemies.forEach(e => {
+                    e.lookAt(playerGroup.position);
+                    e.hpBar.lookAt(camera.getWorldPosition(new THREE.Vector3()));
+                    
+                    const d = playerGroup.position.clone().sub(e.position).normalize();
+                    d.y = 0; // Keep on ground
+                    e.position.add(d.multiplyScalar(0.06));
+
+                    // Deal Damage to player
+                    if(e.position.distanceTo(playerGroup.position) < 1.5) takeDamage(1);
+                });
+
+                if(Math.random() < 0.015 && enemies.length < 15) spawnEnemy();
+            }
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
